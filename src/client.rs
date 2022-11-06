@@ -1,11 +1,12 @@
 use std::{future::Future, pin::Pin};
+use ureq::OrAnyStatus;
 
 use bytes::{Bytes, BytesMut};
 use http::{
     header::{ACCEPT, CONTENT_TYPE},
     Request, Response,
 };
-use http_body::{combinators::UnsyncBoxBody, Body};
+use http_body::{combinators::UnsyncBoxBody};
 use tonic::body::BoxBody;
 use tower::Service;
 
@@ -50,42 +51,38 @@ async fn request(
 ) -> Result<Response<UnsyncBoxBody<Bytes, ClientError>>, ClientError> {
     url.push_str(&req.uri().to_string());
 
-    let client = reqwest::Client::new();
-    let mut builder = client.post(&url);
-
-    builder = builder
-        .header(CONTENT_TYPE, "application/grpc-web+proto")
-        .header(ACCEPT, "application/grpc-web+proto")
-        .header("x-grpc-web", "1")
-        .fetch_credentials_same_origin();
+    let mut builder = ureq::post(&url)
+        .set(CONTENT_TYPE.as_str(), "application/grpc-web+proto")
+        .set(ACCEPT.as_str(), "application/grpc-web+proto")
+        .set("x-grpc-web", "1");
 
     for (header_name, header_value) in req.headers().iter() {
         if header_name != CONTENT_TYPE && header_name != ACCEPT {
-            builder = builder.header(header_name.as_str(), header_value.to_str()?);
+            builder = builder.set(header_name.as_str(), header_value.to_str()?);
         }
     }
 
-    let body = req.into_body().data().await;
-    if let Some(body) = body {
-        builder = builder.body(body?);
-    }
-
-    let response = builder.send().await?;
+    let response = builder.call().or_any_status()?;
 
     let mut result = Response::builder();
     result = result.status(response.status());
 
-    for (header_name, header_value) in response.headers().iter() {
-        result = result.header(header_name.as_str(), header_value.to_str()?);
+    for header_name in response.headers_names().iter() {
+        match response.header(header_name) {
+            Some(header_value) => {
+                result = result.header(header_name.as_str(), header_value);
+            }
+            None => {}
+        }
     }
 
-    let content_type = match response.headers().get(CONTENT_TYPE) {
+    let content_type = match response.header(CONTENT_TYPE.as_str()) {
         None => Err(ClientError::MissingContentTypeHeader),
-        Some(content_type) => content_type.to_str().map_err(Into::into),
+        Some(content_type) => Ok(content_type),
     }?
     .to_owned();
 
-    let bytes = BytesMut::from(response.bytes().await?.as_ref());
+    let bytes = BytesMut::from(response.into_string()?.as_str());
     let body = UnsyncBoxBody::new(GrpcResponse::new(bytes, &content_type)?);
 
     result.body(body).map_err(Into::into)

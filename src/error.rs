@@ -1,5 +1,7 @@
 use http::header::{InvalidHeaderName, InvalidHeaderValue, ToStrError};
 use thiserror::Error;
+use ureq::Transport;
+use std::io::Error;
 
 /// Errors returned by `tonic-web-wasm-client`
 #[derive(Debug, Error)]
@@ -27,11 +29,23 @@ pub enum ClientError {
     MissingContentTypeHeader,
     /// HTTP request failure error
     #[error("http request failed")]
-    ReqwestError(#[from] reqwest::Error),
+    UReqError(#[from] ureq::Error),
     /// gRPC error
     #[error("grpc error")]
     TonicStatusError(#[from] tonic::Status),
     /// Integer conversion error
     #[error("integer conversion error")]
     TryFromIntError(#[from] std::num::TryFromIntError),
+}
+
+impl From<Transport> for ClientError {
+    fn from(err: Transport) -> ClientError {
+        return err.into();
+    }
+}
+
+impl From<Error> for ClientError {
+    fn from(err: Error) -> ClientError {
+        return err.into();
+    }
 }
